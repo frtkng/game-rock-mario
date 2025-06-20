@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Cheese Run – 強ボス&バスター</title>
+<style>
+  canvas{background:#cce8ff;display:block;margin:0 auto;}
+  body{margin:0;overflow:hidden;}
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="400"></canvas>
+<script>
+/* ====== 定数 ====== */
+const cvs=document.getElementById('game');
+const ctx=cvs.getContext('2d');
+const GR=0.5, FLR=350;
+const WORLD=4300, GOAL=WORLD-80;
+const BOSS_X=GOAL-300;
+const CHARGE_MS=700;
+
+const MAX_BULLETS=7, MAX_ENEMIES=15, SPAWN_MS=1200;
+const BOSS_SHOT_MS=2000;        // ボス発射間隔
+/* ================== */
+
+let keys={}, bullets=[], enemies=[], bossBullets=[];
+let score=0, lose=false, clear=false, camX=0;
+let charging=false, chargeStart=0;
+
+/* プレイヤー */
+let ply, boss, bossShotCD;
+function reset(){
+  bullets=[]; enemies=[]; bossBullets=[];
+  score=0; lose=false; clear=false; camX=0;
+  charging=false;
+
+  ply={x:50,y:FLR,w:40,h:40,dx:0,dy:0,jumping:false};
+  boss={hp:30,x:BOSS_X,y:FLR-110,w:140,h:110};
+  bossShotCD=BOSS_SHOT_MS;
+}
+reset();
+
+/* 障害物 */
+const blocks=[{x:400,w:70,h:40},{x:1000,w:90,h:40},{x:1650,w:100,h:40},
+              {x:2350,w:80,h:40},{x:3050,w:90,h:40},{x:3750,w:110,h:40}];
+
+/* ===== 入力 ===== */
+document.addEventListener('keydown',e=>{
+  if(e.repeat) return;
+  keys[e.code]=true;
+  if(e.code==='KeyZ'&&!lose&&!clear){
+    charging=true; chargeStart=Date.now();
+  }
+  if(e.code==='Enter'&&(lose||clear)) reset();
+});
+document.addEventListener('keyup',e=>{
+  keys[e.code]=false;
+  if(e.code==='KeyZ'&&charging&&!lose&&!clear){
+    const held=Date.now()-chargeStart;
+    fireBullet(held>=CHARGE_MS);
+    charging=false;
+  }
+});
+
+/* ===== 弾発射 ===== */
+function fireBullet(charged){
+  if(bullets.length>=MAX_BULLETS) return;
+  bullets.push({
+    x:ply.x+ply.w,
+    y:ply.y+ply.h/2-(charged?11:6),
+    w:charged?22:12,h:charged?22:12,
+    dx:charged?9:8,dmg:charged?3:1,charged
+  });
+}
+function bossFire(){
+  bossBullets.push({
+    x:boss.x, y:boss.y+boss.h/2-5,
+    w:18,h:10,dx:-6
+  });
+}
+
+/* ===== 敵生成(道中) ===== */
+function spawnEnemy(){
+  if(enemies.length>=MAX_ENEMIES||lose||clear) return;
+  const spawnX=camX+cvs.width+120;
+  if(spawnX>boss.x-150) return;
+  const r=Math.random();
+  if(r<0.5){
+    enemies.push({type:'cat',hp:1,x:spawnX,y:FLR,w:42,h:42,
+                 dx:-1.2-Math.random()*0.5,dy:0,jump:false,cd:90});
+  }else{
+    const baseY=220+Math.random()*80;
+    enemies.push({type:'crow',hp:1,x:spawnX,y:baseY,baseY,w:40,h:40,
+                 dx:-1-Math.random()*0.4,ang:Math.random()*6.28});
+  }
+}
+setInterval(spawnEnemy,SPAWN_MS);
+
+/* ===== 更新 ===== */
+function update(){
+  if(lose||clear) return;
+
+  /* 入力 */
+  ply.dx=(keys['ArrowLeft']?-4:0)+(keys['ArrowRight']?4:0);
+  if(keys['Space']&&!ply.jumping){ply.dy=-10;ply.jumping=true;}
+
+  /* X移動+衝突 */
+  ply.x+=ply.dx;
+
+  // ブロック前面衝突
+  blocks.forEach(b=>{
+    if(ply.x+ply.w>b.x&&ply.x<b.x+b.w){
+      const above=ply.y+ply.h<=FLR-b.h+1;
+      if(!above){
+        if(ply.dx>0) ply.x=b.x-ply.w;
+        if(ply.dx<0) ply.x=b.x+b.w;
+      }
+    }
+  });
+  // ボス前面衝突
+  if(boss.hp>0&&ply.x+ply.w>boss.x&&ply.x<boss.x+boss.w){
+    const above=ply.y+ply.h<=boss.y+1;
+    if(!above){
+      if(ply.dx>0) ply.x=boss.x-ply.w;
+      if(ply.dx<0) ply.x=boss.x+boss.w;
+    }
+  }
+  ply.x=Math.max(0,Math.min(ply.x,WORLD-ply.w));
+
+  /* Y物理&着地 */
+  ply.dy+=GR; ply.y+=ply.dy;
+  let onGround=false;
+  // blocks着地
+  blocks.forEach(b=>{
+    const atop=ply.x+ply.w>b.x&&ply.x<b.x+b.w&&
+               ply.y+ply.h>=FLR-b.h&&ply.y+ply.h<=FLR-b.h+ply.dy+GR;
+    if(atop){ply.y=FLR-b.h-ply.h;ply.dy=0;ply.jumping=false;onGround=true;}
+  });
+  // boss上に
+  if(ply.x+ply.w>boss.x&&ply.x<boss.x+boss.w){
+    const atop=ply.y+ply.h>=boss.y&&ply.y+ply.h<=boss.y+ply.dy+GR;
+    if(atop){ply.y=boss.y-ply.h;ply.dy=0;ply.jumping=false;onGround=true;}
+  }
+  if(!onGround&&ply.y>=FLR){ply.y=FLR;ply.dy=0;ply.jumping=false;}
+
+  /* カメラ */
+  camX=Math.min(Math.max(ply.x-250,0),WORLD-cvs.width);
+
+  /* 弾更新 */
+  bullets.forEach(b=>b.x+=b.dx);
+  bullets=bullets.filter(b=>b.x<camX+cvs.width&&b.dmg>0);
+
+  /* ボス弾更新・発射 */
+  bossShotCD-=16; // 約60fps
+ if (boss.hp > 0 && bossShotCD <= 0) {
+  bossFire();
+  bossShotCD = BOSS_SHOT_MS + Math.random()*1500 - 300; // ±0.3 秒ランダム
+ }
+ bossBullets.forEach(s=>s.x+=s.dx);
+  bossBullets=bossBullets.filter(s=>s.x+ s.w>camX);
+
+  /* ボス弾->プレイヤー */
+  bossBullets.forEach(s=>{
+    if(s.x<ply.x+ply.w&&s.x+s.w>ply.x&&s.y<ply.y+ply.h&&s.y+s.h>ply.y){
+      lose=true;
+    }
+  });
+
+  /* 敵更新 */
+  enemies.forEach(e=>{
+    if(e.hp<=0)return;
+    if(e.type==='cat'){
+      e.x+=e.dx; e.cd--;
+      if(e.cd<=0&&!e.jump){e.dy=-6;e.jump=true;e.cd=90;}
+      e.dy+=GR; e.y+=e.dy;
+      if(e.y>=FLR){e.y=FLR;e.dy=0;e.jump=false;}
+    }else{
+      e.x+=e.dx; e.ang+=0.08; e.y=e.baseY+Math.sin(e.ang)*18;
+    }
+    bullets.forEach(b=>{
+      if(b.x<e.x+e.w&&b.x+b.w>e.x&&b.y<e.y+e.h&&b.y+b.h>e.y){
+        e.hp-=b.dmg; b.dmg=0;
+      }
+    });
+    if(e.hp>0&&e.x<ply.x+ply.w&&e.x+e.w>ply.x&&e.y<ply.y+ply.h&&e.y+e.h>ply.y){
+      lose=true;
+    }
+  });
+  enemies=enemies.filter(e=>e.hp>0&&e.x+e.w>camX-100);
+
+  /* ボスHP減少 */
+  bullets.forEach(b=>{
+    if(b.x<boss.x+boss.w&&b.x+b.w>boss.x&&b.y<boss.y+boss.h&&b.y+b.h>boss.y){
+      boss.hp-=b.dmg; b.dmg=0;
+    }
+  });
+
+  /* ボス弾と通常弾衝突(任意で無効化) */
+
+  /* ボス->プレイヤー(接触) */
+  if(boss.hp>0&&ply.x+ply.w>boss.x&&ply.x<boss.x+boss.w&&
+     ply.y+ply.h>boss.y&&ply.y<boss.y+boss.h){
+    lose=true;
+  }
+
+  /* ゴール判定 */
+  if(boss.hp<=0&&ply.x+ply.w>=GOAL) clear=true;
+}
+
+/* ===== 描画ヘルパ ===== */
+function drawMouse(x,y,s,r){
+  ctx.fillStyle='#9c9';ctx.beginPath();ctx.arc(x+s/2,y+s/2,s/2,0,6.28);ctx.fill();
+  ctx.fillStyle='#777';ctx.beginPath();ctx.arc(x+s*0.25,y+s*0.25,s*0.17,0,6.28);ctx.fill();
+  ctx.beginPath();ctx.arc(x+s*0.75,y+s*0.25,s*0.17,0,6.28);ctx.fill();
+  if(r>0){
+    const R=s/2+6+6*r;
+    ctx.save();ctx.globalAlpha=0.4+0.3*r;ctx.fillStyle='#ffeb3b';
+    ctx.beginPath();ctx.arc(x+s/2,y+s/2,R,0,6.28);ctx.fill();ctx.restore();
+    if(r>=1){
+      ctx.fillStyle='#ffeb3b';
+      for(let i=0;i<5;i++){
+        const w=s*0.15,h=s*0.28;
+        const sx=x+s/2+(i-2)*w*0.9;
+        ctx.beginPath();
+        ctx.moveTo(sx,y+s*0.1);
+        ctx.lineTo(sx+w,y+s*0.1);
+        ctx.lineTo(sx+w/2,y-h);ctx.closePath();ctx.fill();
+      }
+    }
+  }
+}
+function drawCat(x,y,s,col){ctx.fillStyle=col;ctx.beginPath();ctx.arc(x+s/2,y+s/2,s/2,0,6.28);ctx.fill();}
+function drawCrow(x,y,s){ctx.fillStyle='#333';ctx.beginPath();ctx.arc(x+s/2,y+s/2,s/2,0,6.28);ctx.fill();}
+function drawBlock(b){ctx.fillStyle='#d77';ctx.fillRect(b.x-camX,FLR-b.h,b.w,b.h);ctx.strokeStyle='#a55';ctx.strokeRect(b.x-camX,FLR-b.h,b.w,b.h);}
+
+/* 強そうなボス描画 */
+function drawBoss(){
+  const x=boss.x-camX,y=boss.y,w=boss.w,h=boss.h;
+  /* 本体 */
+  ctx.fillStyle='#444';ctx.fillRect(x,y,w,h);
+  /* 赤目 */
+  ctx.fillStyle='#f44';ctx.fillRect(x+w*0.25,y+h*0.35,14,10);
+  ctx.fillRect(x+w*0.6 ,y+h*0.35,14,10);
+  /* 牙 */
+  ctx.fillStyle='#fff';
+  ctx.fillRect(x+w*0.3,y+h*0.6,8,12);
+  ctx.fillRect(x+w*0.62,y+h*0.6,8,12);
+  /* 肩スパイク */
+  ctx.fillStyle='#666';
+  for(let i=0;i<2;i++){
+    const sx=x+(i?1:-0.2)*w;
+    ctx.beginPath();
+    ctx.moveTo(sx,y+h*0.3);
+    ctx.lineTo(sx+(i?20:-20),y+h*0.2);
+    ctx.lineTo(sx,y+h*0.1);
+    ctx.closePath();ctx.fill();
+  }
+  /* 背中トゲ */
+  ctx.fillStyle='#555';
+  for(let i=0;i<5;i++){
+    const tx=x+w*0.15+i*0.15*w;
+    ctx.beginPath();
+    ctx.moveTo(tx,h+y*0+ y);
+    ctx.lineTo(tx+20,y-20);
+    ctx.lineTo(tx+40,y);ctx.closePath();ctx.fill();
+  }
+  /* HPバー */
+  if(boss.hp>0){
+    ctx.fillStyle='#fff';ctx.fillRect(x,y-20,w,10);
+    ctx.fillStyle='#f44';ctx.fillRect(x,y-20,w*(boss.hp/30),10);
+    ctx.strokeStyle='#000';ctx.strokeRect(x,y-20,w,10);
+  }else{
+    ctx.fillStyle='rgba(0,0,0,0.3)';
+    ctx.fillRect(x,y,w,h);
+  }
+}
+
+/* ===== 描画 ===== */
+function draw(){
+  ctx.clearRect(0,0,cvs.width,cvs.height);
+  ctx.fillStyle='#cce8ff';ctx.fillRect(0,0,cvs.width,cvs.height);
+  ctx.fillStyle='#b4b4b4';ctx.fillRect(-camX,FLR+30,WORLD,50);
+
+  blocks.forEach(drawBlock);
+
+  /* ゴール旗 */
+  ctx.fillStyle='#555';ctx.fillRect(GOAL-camX,FLR-80,6,110);
+  ctx.fillStyle=boss.hp>0?'#888':'#e74';
+  ctx.beginPath();ctx.moveTo(GOAL-camX+6,FLR-80);
+  ctx.lineTo(GOAL-camX+46,FLR-60);ctx.lineTo(GOAL-camX+6,FLR-40);
+  ctx.closePath();ctx.fill();
+
+  /* スコア */
+  ctx.fillStyle='#000';ctx.font='18px sans-serif';
+  ctx.fillText(`SCORE: ${score}`,20,28);
+
+  /* プレイヤー */
+  const ratio=charging?Math.min(1,(Date.now()-chargeStart)/CHARGE_MS):0;
+  drawMouse(ply.x-camX,ply.y,ply.w,ratio);
+
+  /* 弾 */
+  bullets.forEach(b=>{
+    ctx.fillStyle=b.charged?'#ffeb3b':'#ffd54f';
+    ctx.fillRect(b.x-camX,b.y,b.w,b.h);
+  });
+
+  /* ボス弾 */
+  ctx.fillStyle='#a64cff';
+  bossBullets.forEach(s=>ctx.fillRect(s.x-camX,s.y,s.w,s.h));
+
+  /* ボス */
+  drawBoss();
+
+  /* 道中敵 */
+  enemies.forEach(e=>{
+    if(e.hp<=0)return;
+    const x=e.x-camX;
+    if(e.type==='cat') drawCat(x,e.y,e.w,'#f9a03c');
+    else drawCrow(x,e.y,e.w);
+  });
+
+  /* メッセージ */
+  if(lose||clear){
+    ctx.fillStyle='rgba(0,0,0,0.55)';ctx.fillRect(0,0,cvs.width,cvs.height);
+    ctx.fillStyle='#fff';ctx.textAlign='center';ctx.font='48px sans-serif';
+    ctx.fillText(lose?'LOSE':'GOAL!',cvs.width/2,cvs.height/2-20);
+    ctx.font='20px sans-serif';
+    ctx.fillText('Press ENTER to Restart',cvs.width/2,cvs.height/2+30);
+  }
+}
+
+/* ===== ループ ===== */
+function loop(){update();draw();requestAnimationFrame(loop);}
+loop();
+</script>
+</body>
+</html>
